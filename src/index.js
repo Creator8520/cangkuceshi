@@ -1315,7 +1315,9 @@ async function serve(request, env) {
 
   const pagePath = url.pathname.replace(/\/+$/, "") || "/";
   if (["/", "/admin", "/purchase", "/warehouse", "/index.html"].includes(pagePath)) {
-    url.pathname = "/index.html";
+    // Cloudflare's default asset HTML handling redirects /index.html back to /.
+    // Fetch the canonical root path directly to avoid a Worker/assets redirect loop.
+    url.pathname = "/";
     return assetResponse(env.ASSETS, new Request(url, request));
   }
   if (["/app.js", "/style.css"].includes(pagePath)) return assetResponse(env.ASSETS, request);
