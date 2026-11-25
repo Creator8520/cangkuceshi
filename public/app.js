@@ -10,6 +10,33 @@ let inventoryQuery = '';
 let entryRole = location.pathname.split('/').filter(Boolean)[0] || '';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date = value => new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
+const ozonStatuses = {
+  awaiting_registration:'等待登记', acceptance_in_progress:'正在验收', awaiting_approve:'等待确认',
+  awaiting_packaging:'等待打包', awaiting_deliver:'等待发货', arbitration:'仲裁处理中',
+  client_arbitration:'客户配送争议处理中', delivering:'配送中', delivered:'已送达',
+  cancelled:'已取消', canceled:'已取消', not_accepted:'未接收', driver_pickup:'配送员已取件',
+  sent_by_seller:'卖家已发货', waiting_for_seller:'等待卖家处理', processing:'处理中',
+  ready_for_shipment:'等待发运'
+};
+const ozonSubstatuses = {
+  posting_created:'订单已创建', posting_registered:'已登记', posting_awaiting_registration:'等待登记',
+  posting_acceptance_in_progress:'正在验收', posting_in_arbitration:'仲裁处理中',
+  posting_in_client_arbitration:'客户配送争议处理中', posting_transferring_to_delivery:'正在交接配送',
+  posting_in_carriage:'运输中', posting_on_way_to_city:'正在运往所在城市',
+  posting_on_way_to_pickup_point:'正在运往自提点', posting_in_pickup_point:'已到自提点',
+  posting_in_courier_service:'配送员配送中', posting_driver_pick_up:'配送员已取件',
+  posting_delivered:'已送达', posting_received:'已签收', posting_conditionally_delivered:'有条件送达',
+  posting_returned_to_warehouse:'已退回仓库', posting_not_in_carriage:'未进入运输',
+  posting_not_in_sort_center:'分拣中心未接收', posting_registration_error:'登记失败',
+  posting_canceled:'已取消', posting_cancelled:'已取消', posting_split_pending:'等待拆分订单',
+  posting_awaiting_passport_data:'等待护照信息', posting_transferred_to_courier_service:'已交接配送服务',
+  posting_transferred_to_delivery:'已交接配送', posting_in_delivery:'配送中', posting_returning:'退回中',
+  posting_returned:'已退回', posting_lost:'运输丢失', ship_failed:'发货失败',
+  '历史同步记录':'历史同步记录'
+};
+const localizeOzon = (value, dictionary) => value
+  ? (dictionary[value] || (/[^\x00-\x7F]/.test(value) ? value : '其他状态'))
+  : '—';
 const input = (name, title, type='text', attrs='') => `<label>${title}<input name="${name}" type="${type}" required ${attrs}></label>`;
 const button = (text, alt=false) => `<button ${alt?'class="alt"':''}>${text}</button>`;
 const hidden = (name, value) => `<input type="hidden" name="${name}" value="${esc(value)}">`;
@@ -146,7 +173,7 @@ function stores() {
     <label>商品货号<input name="offer" value="${esc(catalogSearch.offer)}" placeholder="搜索货号"></label>
     <div class="catalog-search-actions"><button type="submit">搜索所有店铺</button><button type="button" class="alt" data-clear-catalog-search>清除</button></div>
   </form>`;
-  const storeToolbar = `<div class="store-toolbar">${storeSelect}<button type="button" class="alt" data-open-store>绑定新店铺</button>${selected?form('sync',hidden('client',selected.client)+button('同步所选店铺')):''}</div>`;
+  const storeToolbar = `<div class="store-toolbar">${storeSelect}${selected?form('sync',hidden('client',selected.client)+button('同步所选店铺')):''}</div>`;
   const selectedProducts = selected ? (selected.catalog || []).map(product=>({
     ...product, _client:selected.client, _store:selected.name, _bindings:selected.bindings || {},
   })) : [];
@@ -197,14 +224,27 @@ function stores() {
     : selected
       ? `<p class="catalog-summary">${esc(selected.name)} · ${selected.catalog?.length ?? selected.offers?.length ?? 0} 个商品 · ${Object.keys(selected.bindings || {}).length} 个货号已绑定 · ${selected.pending ?? 0} 条订单待匹配${selected.error?' · '+esc(selected.error):''}</p><p class="catalog-summary">上次同步 ${date(selected.cursor)}</p>`
       : '<p class="catalog-summary">绑定店铺后，可以在上方选择店铺并查看商品。</p>';
-  const dialog = `<dialog class="store-dialog" data-store-dialog><form data-action="store" class="store-dialog-form">
-    <div class="dialog-heading"><div><span class="eyebrow">OZON 店铺</span><h2>绑定新店铺</h2></div><button type="button" class="close-dialog" data-close-store aria-label="关闭">×</button></div>
-    ${input('name','店铺名称')}${input('client','Client-Id')}${input('key','API Key','password','autocomplete="off"')}
-    <div class="dialog-actions"><button type="button" class="alt" data-close-store>取消</button><button type="submit">保存店铺</button></div>
-  </form></dialog>`;
   return `<section class="panel ozon-panel"><div class="section-heading"><h2>OZON 店铺商品</h2>${storeToolbar}</div>${searchToolbar}${summary}
     <div class="catalog-filter">${categoryControl}<span>${products.length} 个商品</span></div>
     ${table(['商品信息','店铺','仓库商品 ID'],catalogRows,searching?'没有符合条件的商品。':'当前店铺没有已抓取商品。')}
+  </section>`;
+}
+function storeManagement() {
+  const shops=Object.values(state.stores||{});
+  const rows=shops.map(shop=>[
+    esc(shop.name),esc(shop.client),String(shop.catalog?.length||0),String(Object.keys(shop.bindings||{}).length),
+    shop.cursor?date(shop.cursor):'—',shop.error?pill('同步异常',true):pill('已绑定'),
+    form('remove-store',hidden('client',shop.client)+button('解除绑定',true))
+  ]);
+  const dialog = `<dialog class="store-dialog" data-store-dialog><form data-action="store" class="store-dialog-form">
+    <div class="dialog-heading"><div><span class="eyebrow">店铺管理</span><h2>添加 OZON 店铺</h2></div><button type="button" class="close-dialog" data-close-store aria-label="关闭">×</button></div>
+    ${input('name','店铺名称')}${input('client','Client-Id')}${input('key','API Key','password','autocomplete="off"')}
+    <p class="store-dialog-note">API Key 会加密保存。添加后可到「OZON 店铺」同步商品并绑定仓库商品。</p>
+    <div class="dialog-actions"><button type="button" class="alt" data-close-store>取消</button><button type="submit">保存店铺</button></div>
+  </form></dialog>`;
+  return `<section class="panel store-management-panel"><div class="section-heading"><h2>店铺管理</h2><button type="button" data-open-store>添加店铺</button></div>
+    <p class="catalog-summary">添加多个店铺后可分别同步和查看。解除绑定会停止该店铺后续同步并清除当前商品绑定关系，不会调整已有仓库库存；历史出单数据保留，重新绑定相同 Client-Id 后可继续查看。</p>
+    ${table(['店铺名称','Client-Id','商品数','已绑定货号','最近同步','连接状态','操作'],rows,'尚未添加店铺。')}
   </section>${dialog}`;
 }
 function storeSales() {
@@ -220,15 +260,23 @@ function storeSales() {
   const summary=selected
     ? `<p class="catalog-summary">${esc(selected.name)} · ${data?`第 ${Math.floor(data.offset/data.limit)+1} 页，共 ${data.total} 个订单`:(salesLoading===selected.client?'正在读取出单信息…':'尚未读取订单')} · 上次同步 ${date(selected.cursor)}${(data?.error||selected.error)?' · '+esc(data?.error||selected.error):''}</p><p class="sales-note">历史订单仅写入出单记录，不会扣减当前仓库库存；开始日期默认近 90 天，可向前调整。</p>`
     : '';
-  const rows=selected?(data?.sales||[]).flatMap(sale=>(sale.products||[]).map(product=>[
+  const catalogByOffer=new Map((selected?.catalog||[]).map(product=>[String(product.offer_id),product]));
+  const rows=selected?(data?.sales||[]).flatMap(sale=>(sale.products||[]).map(product=>{
+    const catalogProduct=catalogByOffer.get(String(product.offer_id))||{};
+    const imageUrl=product.primary_image||catalogProduct.primary_image||'';
+    const image=typeof imageUrl==='string'&&imageUrl.startsWith('https://')
+      ? `<img class="sales-product-thumb" src="${esc(imageUrl)}" alt="" loading="lazy">`
+      : '<span class="sales-image-placeholder">无主图</span>';
+    const productInfo=`<div class="sales-product">${image}<span>${esc(product.name||catalogProduct.name||'—')}</span></div>`;
+    return [
     sale.created_at||sale.in_process_at?date(sale.created_at||sale.in_process_at):'—',
-    esc(sale.number),esc(sale.status||'—'),esc(sale.substatus||'—'),
-    esc(product.name||'—'),esc(product.sku||'—'),esc(product.offer_id||'—'),product.quantity,
+    esc(sale.number),esc(localizeOzon(sale.status,ozonStatuses)),esc(localizeOzon(sale.substatus,ozonSubstatuses)),
+    productInfo,esc(product.sku||catalogProduct.sku||'—'),esc(product.offer_id||'—'),product.quantity,
     esc(selected.bindings?.[product.offer_id]||'未绑定')
-  ])):[];
+  ];})):[];
   const empty=salesLoading===selected?.client?'正在读取出单信息…':'当前店铺还没有已同步的出单信息。';
   const pagination=data&&data.total>data.limit?`<div class="sales-pagination"><button type="button" class="alt" data-sales-offset="${Math.max(0,data.offset-data.limit)}" ${data.offset<=0?'disabled':''}>上一页</button><span>第 ${Math.floor(data.offset/data.limit)+1} / ${Math.ceil(data.total/data.limit)} 页</span><button type="button" class="alt" data-sales-offset="${data.offset+data.limit}" ${data.offset+data.limit>=data.total?'disabled':''}>下一页</button></div>`:'';
-  return `<section class="panel sales-panel"><div class="section-heading"><h2>店铺出单信息</h2>${picker}</div>${summary}${table(['出单时间','店铺订单号','状态','子状态','商品名称','SKU','货号','数量','仓库商品 ID'],rows,empty)}${pagination}</section>`;
+  return `<section class="panel sales-panel"><div class="section-heading"><h2>店铺出单信息</h2>${picker}</div>${summary}${table(['出单时间','店铺订单号','状态','子状态','商品信息','SKU','货号','数量','仓库商品 ID'],rows,empty)}${pagination}</section>`;
 }
 function permissions() {
   const featureNames = {orders:'订单',inventory:'库存',moves:'库存流水',ozon:'OZON 店铺'};
@@ -266,6 +314,7 @@ function render() {
   if (features.orders) tabs['订单'] = ()=> ((role==='purchase'||role==='admin')?procurement():'')+orders();
   if (features.inventory) tabs['库存'] = inventory;
   if (features.moves) tabs['库存流水'] = inventoryMoves;
+  if (features.ozon) tabs['店铺管理'] = storeManagement;
   if (features.ozon) tabs['OZON 店铺'] = stores;
   if (features.ozon) tabs['店铺出单'] = storeSales;
   if (role==='admin') tabs['权限管理'] = permissions;
@@ -280,7 +329,7 @@ function render() {
   const statsHtml = stats.length ? `<div class="stats">${stats.map(([title,count])=>`<div class="card"><span>${title}</span><strong>${count}</strong></div>`).join('')}</div>` : '';
   app.innerHTML = `<header><b>仓库管理系统</b>${form('logout',button('退出登录',true))}</header><main><div class="eyebrow">仓库运营</div><h1>${roles[role]}工作台</h1>
     ${statsHtml}<nav aria-label="工作台导航">${Object.keys(tabs).map(t=>`<button class="alt" data-tab="${t}" aria-current="${t===tab}">${t}${t==='消息'&&state.unread_count?' · '+state.unread_count:''}</button>`).join('')}</nav>${tabs[tab]()}</main>`;
-  if(tab==='店铺出单'&&selectedStore) loadStoreSales(selectedStore);
+  if((tab==='店铺出单')&&selectedStore) loadStoreSales(selectedStore);
 }
 async function refresh(force=false) {
   const next = await api('state');
@@ -418,7 +467,9 @@ app.addEventListener('submit',async e=>{
   if(submit) submit.disabled=true;
   try{
     if(action==='store') selectedStore=data.client;
+    if(action==='remove-store'&&window.confirm(`解除店铺「${data.client}」的绑定？停止自动同步并清除该店铺的货号绑定，库存不变；重新绑定相同 Client-Id 后仍可查看历史出单。`)!==true){busy=false;return;}
     await api(action,data);
+    if(action==='remove-store') { if(selectedStore===data.client) selectedStore=null; salesData=null; salesOffset=0; }
     if(action==='sync'||action==='sync-history') {
       salesOffset=0;
       salesData=null;
@@ -445,7 +496,7 @@ app.addEventListener('submit',async e=>{
       salesLoading=null;
       salesOffset=0;
     }
-    const success={order:'已提交待确认采购单','order-batch':'批量采购单已提交',receipt:'已确认入库','delete-order':'待确认采购单已删除','delete-legacy-order':'历史采购单记录已删除','delete-legacy-move':'历史库存流水已删除','delete-item':'仓库商品和关联数据已删除','read-notice':'消息已标记为已读','read-all-notices':'未读消息已全部标记为已读','edit-item':'商品 ID、名称、库存和 SKU 已更新',store:'店铺已添加并保存',bind:'已保存绑定',unbind:'货号绑定已解除',sync:'同步完成','sync-history':'历史出单读取完成',toggle:'权限已更新',watch:'关注设置已更新',stock:'库存已手动调整','rename-item':'仓库商品 ID 已更新'};
+    const success={order:'已提交待确认采购单','order-batch':'批量采购单已提交',receipt:'已确认入库','delete-order':'待确认采购单已删除','delete-legacy-order':'历史采购单记录已删除','delete-legacy-move':'历史库存流水已删除','delete-item':'仓库商品和关联数据已删除','read-notice':'消息已标记为已读','read-all-notices':'未读消息已全部标记为已读','edit-item':'商品 ID、名称、库存和 SKU 已更新',store:'店铺已添加并保存','remove-store':'店铺已解绑，历史出单保留',bind:'已保存绑定',unbind:'货号绑定已解除',sync:'同步完成','sync-history':'历史出单读取完成',toggle:'权限已更新',watch:'关注设置已更新',stock:'库存已手动调整','rename-item':'仓库商品 ID 已更新'};
     if(success[action]) message(success[action]);
     await refresh(true);
   }catch(error){message(error.message);}

@@ -6,7 +6,7 @@ const ACTION_FEATURES = {
   order: "orders", "order-batch": "orders", receipt: "orders", "delete-order": "orders",
   "delete-legacy-order": "orders", "delete-legacy-move": "moves", stock: "inventory",
   "rename-item": "inventory", "edit-item": "inventory", "delete-item": "inventory", watch: "inventory",
-  store: "ozon", sync: "ozon", bind: "ozon", unbind: "ozon"
+  store: "ozon", "remove-store": "ozon", sync: "ozon", bind: "ozon", unbind: "ozon"
 };
 const ROLE_LABELS = { admin: "总控端", purchase: "采购端", warehouse: "仓库端", system: "系统同步", legacy: "历史记录" };
 const enc = new TextEncoder();
@@ -357,6 +357,14 @@ function mutate(state, role, action, data) {
       client, name: required(data, "name"), key: required(data, "key"), _key_encrypted: "",
       start: now(), cursor: now(), offers: [], catalog: [], bindings: {}, lines: {}, sales: [], error: ""
     };
+    return;
+  }
+
+  if (action === "remove-store") {
+    const client = required(data, "client");
+    const store = state.stores[client];
+    if (!store) err("找不到要解除绑定的店铺");
+    delete state.stores[client];
     return;
   }
 
@@ -1125,6 +1133,7 @@ async function syncStore(env, client, options = {}) {
             offer_id: offer,
             sku: String(product.sku || catalogProduct.sku || ""),
             name: String(product.name || catalogProduct.name || ""),
+            primary_image: String(catalogProduct.primary_image || ""),
             quantity: quantity(product, "quantity", 1)
           });
         }
@@ -1206,7 +1215,22 @@ async function salesPage(env, role, client, offset) {
     "ORDER BY COALESCE(NULLIF(json_extract(payload, '$.sale.created_at'), ''), " +
     "NULLIF(json_extract(payload, '$.sale.in_process_at'), '')) DESC, doc_key DESC LIMIT 200 OFFSET ?"
   ).bind(client, offset).all();
-  const entries = (page.results || []).map(row => JSON.parse(row.payload).sale);
+  const catalogByOffer = new Map((store.catalog || []).map(product => [String(product.offer_id), product]));
+  const entries = (page.results || []).map(row => {
+    const sale = JSON.parse(row.payload).sale;
+    return {
+      ...sale,
+      products: (sale.products || []).map(product => {
+        const catalogProduct = catalogByOffer.get(String(product.offer_id)) || {};
+        return {
+          ...product,
+          sku: product.sku || catalogProduct.sku || "",
+          name: product.name || catalogProduct.name || "",
+          primary_image: product.primary_image || catalogProduct.primary_image || ""
+        };
+      })
+    };
+  });
   return {
     client, name: store.name, cursor: store.cursor, error: store.error || "",
     total: Number(count?.total || 0), offset, limit: 200, sales: entries
